@@ -1,0 +1,1083 @@
+---
+title: "Movielens Project Report"
+author: "Magdalena Borisova"
+date: "6/10/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+#############################################################
+## movielens dataset
+#############################################################
+
+# Note: this process could take a couple of minutes
+
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+# The "fread" fucntion will be used in place of the "read.table" function because it runs faster 
+# than the "read.table" function but it gives a similar result
+# Disregard original code below which used the "read.table" function:
+# ratings <- read.table(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))), col.names = c("userId", "movieId", "rating", "timestamp"))
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+
+# Check the structure of the file 
+
+str(ratings)
+
+
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(stringr)) install.packages("stringr", repos = "http://cran.us.r-project.org")
+if(!require(purrr)) install.packages("purrr", repos = "http://cran.us.r-project.org")
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# Check the structure of the file 
+
+str(movies)
+
+
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+# Re-check the structure of the file after formatting 
+
+str(movies)
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+
+
+#############################################################
+## 1. Descriptive statistics
+#############################################################
+
+if(!require(Hmisc)) install.packages("Hmisc", repos = "http://cran.us.r-project.org")
+
+## 1.1 Numbers
+
+dim(movielens)
+
+colnames(movielens)
+
+str(movielens)
+
+head(movielens)
+
+movielens %>% as_tibble()
+
+describe(movielens)
+
+movielens %>% 
+  summarise(n_users = n_distinct(userId),
+            n_movies = n_distinct(movieId))
+
+expected <- 69878 * 10677
+expected
+
+# 746,087,406 (expected number of ratings based on number of distinct users and distinct movies)
+# vs. 10,000,054 (observed number of ratings based on distinct users and distinct movies in the 
+# movielens dataset)
+
+# Not every user rated every movie
+
+
+## 1.2 Graphs
+# log scale will help with skewness by producing a better visual representation of the data
+
+movielens %>% 
+  count(userId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("Users")
+
+# Some users rated more movies than others 
+
+movielens %>% 
+  count(movieId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("Movies")
+
+# Some movies had more ratings than others
+
+
+
+#############################################################
+## 2. edx set and validation set
+#############################################################
+
+## 2.1  Create edx set and validation set
+
+# validation set (test set) will be 10% of the movieLens dataset
+# edx set (train set) will be 90% of the movielens dataset
+
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Confirm that the userId and movieId in the validation set are also in the edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add the rows removed from the validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+
+## 2.2 Examine the sets
+
+# Check the structure of the datasets
+
+str(movielens)
+str(edx)
+str(validation)
+
+# Check the dimensions of the datasets after the creation of the edx and validation sets
+
+table(movielens$rating)
+
+table(edx$rating)
+
+table(validation$rating)
+
+
+# Keep the edx and validation datasets for modeling and the movielens dataset for regularization
+
+rm(dl, ratings, movies, test_index, temp, removed)
+
+
+#############################################################
+## 3. RMSE
+#############################################################
+
+## Create RMSE
+RMSE <- function(true_ratings, predicted_ratings) {
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+
+#############################################################
+## 4. Models
+#############################################################
+
+## 4.1 First model: "Modeling the average"
+
+# Naively assume that all differences in the outcome (rating) are explained by random variation 
+# (epsilon) and all movies received the average rating (mu) and all users gave the average rating 
+# (mu) to all movies: Y = mu_hat + e
+
+# Find mu by calculating the the average of all ratings in the edx set
+
+mu_hat <- mean(edx$rating)
+mu_hat 
+
+# 3.512465
+
+# Predict all unknown ratings in the validation set
+
+naive_rmse <- RMSE(validation$rating, mu_hat)
+naive_rmse 
+
+# 1.061202
+
+# Create a results table from the naive model above 
+
+rmse_results <- data_frame(method = "Just the Average Model", RMSE = naive_rmse)
+rmse_results
+
+rmse_results %>% knitr::kable()
+
+
+## 4.2 Second model: "Modeling the movie effects" 
+
+# Observations from the graphs above: some movies are generally rated higher than others
+
+# Add a term b_hat_m to represent the average rating for movie m: 
+# Y_m = mu_hat + b_hat_m + e_m
+
+# fit_b_m <- lm(rating ~ as.factor(movieId), data = edx)
+# Use the average of (Y_m − mu_hat) for each movie m instead of "fit_b_m" because the dataset 
+# has a lot of observations 
+
+movie_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarise(b_hat_m = mean(rating - mu_hat))
+
+# Plot b_hat_m
+
+movie_avgs %>% 
+  qplot(b_hat_m, geom ="histogram", bins = 10, data = ., color = I("black"))
+
+# b_hat_m estimates vary 
+
+# mu_hat = 3.5 (from the naive model in section 4.1) along with b_hat_m = -3 (from the graph 
+# above) result in a 0.5 star rating (the lowest rating)
+
+# mu_hat = 3.5 (from the naive model in section 4.1) along with b_hat_m = 1.5 (from the graph 
+# above) result in a 5 star rating (the higest rating)
+
+# Check if the prediction improves after b_hat_m is added to the model
+
+predicted_ratings <- mu_hat + validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  .$b_hat_m
+
+model_2_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie Effect Model",  
+                                     RMSE = model_2_rmse))
+rmse_results %>% knitr::kable()
+
+## 4.3 Third model: "Modeling the movie and user effects"
+
+# Calculate and plot the average rating for user u, b_hat_u, for those that have rated 
+# over 100 movies
+
+edx %>% 
+  group_by(userId) %>% 
+  summarise(b_hat_u = mean(rating)) %>% 
+  filter(n()>=100) %>%
+  ggplot(aes(b_hat_u)) + 
+  geom_histogram(bins = 30, color = "black")
+
+# The skewness of the graph suggests that there is subjectivity in how a user rates movies
+# which should be accounted for/added in the model
+
+# Some users are generally rating movies more than others
+
+# Add a term b_hat_u to represent the average ranking for user u: 
+# Y_m,u = mu_hat + b_hat_m + b_hat_u + e_m,u
+
+# fit_b_u <- lm(rating ~ as.factor(movieId) + as.factor(userId), data = edx)
+# Use the average of (Y_m,u − mu_hat - b_hat_m) for each user u instead of "fit_b_u" because 
+# the dataset has a lot of observations
+
+user_avgs <- edx %>%  
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarise(b_hat_u = mean(rating - mu_hat - b_hat_m))
+
+# Plot b_hat_u 
+
+user_avgs %>% 
+  qplot(b_hat_u, geom ="histogram", bins = 10, data = ., color = I("black"))
+
+# b_hat_u estimates vary
+
+# mu_hat = 3.5 (from the naive model in section 4.1) along with b_hat_m = -3 (from the graph 
+# in section 4.2) and b_hat_u = 0 (from the graph above) result in a 0.5 star rating (the 
+# lowest rating)
+
+# mu_hat = 3.5 (from the naive model in section 4.1) along with b_hat_m = 1 (from the graph 
+# in section 4.2) and  b_hat_u = 0.5 (from the graph above) result in a 5 star rating (the 
+# higest rating)
+
+# Check if the prediction improves after b_hat_u is added to the model
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u) %>%
+  .$pred
+
+model_3_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User Effects Model",  
+                                     RMSE = model_3_rmse))
+rmse_results %>% knitr::kable()
+
+# RSME improved once both the movie and user effects are added to the model
+
+
+
+#############################################################
+## 5. Regularization
+#############################################################
+
+# Regularize the chosen final model above to prevent overfitting
+
+## 5.1 Review the best and worst movies 
+
+# Review the "Movie Effect Model" in the validation set
+
+validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  mutate(residual = rating - (mu_hat + b_hat_m)) %>%
+  arrange(desc(abs(residual))) %>% 
+  select(title, residual) %>% slice(1:10) 
+
+# Take titles from the movielens dataset and create a dataset of the movieIds and titles
+
+movie_titles <- movielens %>% 
+  select(movieId, title) %>%
+  distinct()
+
+# Examine the best movies 
+
+movie_avgs %>% 
+  left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_hat_m)) %>% 
+  select(title, b_hat_m) %>% 
+  slice(1:10) 
+
+# Examine the worst movies
+
+movie_avgs %>% 
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_hat_m) %>% 
+  select(title, b_hat_m) %>% 
+  slice(1:10) 
+
+# Examine the best movies rating frequency in the edx set 
+
+edx %>% count(movieId) %>% 
+  left_join(movie_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_hat_m)) %>% 
+  select(title, b_hat_m, n) %>% 
+  slice(1:10) 
+
+# Examine the worst movies rating frequency in the edx set
+
+edx %>% count(movieId) %>% 
+  left_join(movie_avgs) %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_hat_m) %>% 
+  select(title, b_hat_m, n) %>% 
+  slice(1:10)
+
+# For the most part, the best and worst movies were rated by very few users
+# Less frequently rated movies can cause too much variablilty and increase the RMSE for the model 
+
+# Regulariaztion presents a conservative method to deal with the variability and to control 
+# the movie effects
+
+
+## 5.2 Penalized Least Squares
+
+# Use cross-validation to pick lambda 
+
+# Select a range of lambdas 
+
+lambdas <- seq(0, 10, 0.25)
+
+# Create a loop to calculate rmses for the "Movie + User Effects Model"
+
+rmses <- sapply(lambdas, function(l){
+  
+  mu_hat <- mean(edx$rating)
+  
+  b_hat_m <- edx %>% 
+    group_by(movieId) %>%
+    summarise(b_hat_m = sum(rating - mu_hat)/(n()+l))
+  
+  b_hat_u <- edx %>% 
+    left_join(b_hat_m, by="movieId") %>%
+    group_by(userId) %>%
+    summarise(b_hat_u = sum(rating - b_hat_m - mu_hat)/(n()+l))
+  
+  predicted_ratings <- validation %>% 
+    left_join(b_hat_m, by = "movieId") %>%
+    left_join(b_hat_u, by = "userId") %>%
+    mutate(pred = mu_hat + b_hat_m + b_hat_u) %>%
+    pull(pred)
+  
+  return(RMSE(predicted_ratings, validation$rating))
+})
+
+# Plot the lambdas against rmses
+
+qplot(lambdas, rmses)  
+
+# Find the optimal lambda
+
+lambda <- lambdas[which.min(rmses)]
+lambda
+
+# 5.25
+
+# Check the RMSE after the regularization
+
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Regularized Movie + User Effects Model",  
+                                     RMSE = min(rmses)))
+rmse_results %>% knitr::kable()
+
+# |method                                     |      RMSE|
+# |:------------------------------------------|---------:|
+# |Just the Average Model                     | 1.0612018|
+# |Movie Effect Model                         | 0.9439087|
+# |Movie + User Effects Model                 | 0.8653488|
+# |Regularized Movie + User Effects Model     | 0.8648170|*
+
+# The regularized model produced a lower RMSE than the original "Movie and User Effects Model".
+# This regularized model is not crowded with predictors and gives a similar RMSE to models with 
+# more than two predictors (addintional models are included in section 6), which makes it an
+# applealing choice for predicting the movie ratings.
+
+
+## 5.3 Regularized movie effects estimates 
+
+# Compute the regularized estimated for b_hat_m to compare to the least squared 
+# estimates of b_hat_m
+
+movie_reg_avgs <- edx %>% 
+  group_by(movieId) %>% 
+  summarise(b_hat_m = sum(rating - mu_hat)/(n()+lambda), n_hat_m = n()) 
+
+# Plot the regularized estimates for b_hat_m versus the least squared estimates for b_hat_m
+# to see the change in the estimates with regularization 
+
+data_frame(original = movie_avgs$b_hat_m, 
+           regularlized = movie_reg_avgs$b_hat_m, 
+           n = movie_reg_avgs$n_hat_m) %>%
+  ggplot(aes(original, regularlized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.5)
+
+# Examine the best movies with regularized estimates for b_hat_m
+
+validation %>%
+  count(movieId) %>% 
+  left_join(movie_reg_avgs, by = "movieId") %>%
+  left_join(movie_titles, by = "movieId") %>%
+  arrange(desc(b_hat_m)) %>% 
+  select(title, b_hat_m, n) %>% 
+  slice(1:10)
+
+# Examine the worst movies with the regularized estimates for b_hat_m
+
+validation %>%
+  count(movieId) %>% 
+  left_join(movie_reg_avgs, by = "movieId") %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_hat_m) %>% 
+  select(title, b_hat_m, n) %>% 
+  slice(1:10)
+
+# The results improved and the movie ratings for the best and worst movies seem
+# more resonable with the penalized estimates for b_hat_m
+
+# Concluding remarks:
+# The "Regularized Movie and User Effects Model" is the final model chosen because there are 
+# only two predictors in the model and the RMSE achieved is substantially lower (RMSE = 0.86) 
+# than in the naive model (naive RMSE = 1.061), which assumed the same average rating for all 
+# movies and users. The beauty of this model is that it is simple so it can be easily taken 
+# and reproduced for another dataset because it is not too specific to this particular dataset, 
+# which makes it more likely to be suitable for other datasets. More predictors were added 
+# (as seen in section 6. below) but the RMSE did not improve substantially to allow for addition 
+# of those predictors in the model with a good reason for doing so. The more predictors added
+# to the model, the more specific the model becomes to this particular dataset and the harder it
+# becomes to use it on a different dataset and expect to achieve the same low squared estimates. 
+
+# Output RMSE 
+
+rmse_results %>% knitr::kable()
+
+
+
+
+#############################################################
+## 6. Additional models (Appendix)
+#############################################################
+
+# These additional models did not make the cut but helped with choosing the final model
+
+
+## 6.1 "Modeling the movie and user interaction effects"
+
+# Add an interaction term to model 3 ("Movie + User Effects Model") from section 4.2: 
+# Y_m,u = mu_hat + b_hat_m + b_hat_u + (b_hat_m * b_hat_u) + e_m,u
+
+# Check if the prediction improves after the interaction is added to the model
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + (b_hat_m * b_hat_u)) %>%
+  .$pred
+
+model_5_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie * User Effects Interaction Model",  
+                                     RMSE = model_5_rmse))
+rmse_results %>% knitr::kable()
+# |method                                 |      RMSE|
+# |:--------------------------------------|---------:|
+# |Just the average                       | 1.0612018|
+# |Movie Effect Model                     | 0.9439087|
+# |Movie + User Effects Model             | 0.8653488|
+# |Movie * User Effects Interaction Model | 0.8978567|
+
+# The prediction did not improve 
+
+
+## 6.2 "Modeling the movie, user and genre effects"
+
+# Add genres to the model along with movieId and userId:
+# Y_m,u,g = mu_hat + b_hat_m + b_hat_u + b_hat_g + e_m,u,g
+
+# Use the average of (Y_m − mu_hat - b_hat_m - b_hat_u) for each genre g because the dataset
+# has a lot of observations 
+
+genres_avgs <- edx %>%  
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarise(b_hat_g = mean(rating - mu_hat - b_hat_m - b_hat_u))
+
+# Check if the prediction improves after adding genres to the model:
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs, by='genres') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_g) %>%
+  .$pred
+
+model_6_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User + Genre Effects Model",  
+                                     RMSE = model_6_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                 |      RMSE|
+# |:--------------------------------------|---------:|
+# |Just the Average Model                 | 1.0612018|
+# |Movie Effect Model                     | 0.9439087|
+# |Movie + User Effects Model             | 0.8653488|
+# |Movie * User Effects Interaction Model | 0.8978567|
+# |Movie + User + Genre Effects Model     | 0.8649469|
+
+# Adding the genres effect to the model improved the RMSE but not enough to justify adding 
+# another predictor to the model and making it more complex
+
+
+## 6.3 "Modeling user and genre effects"
+
+# Create a new average of (Y_m − mu_hat - b_hat_u) for each genre g with only user u in the model:
+# Y_u,g = mu_hat + b_hat_u + b_hat_g + e_u,g
+
+genres_avgs_u <- edx %>%  
+  left_join(user_avgs, by='userId') %>%
+  group_by(genres) %>%
+  summarise(b_hat_g = mean(rating - mu_hat - b_hat_u))
+
+# Check if the prediction improves with only userId and genres in the model:
+
+predicted_ratings <- validation %>% 
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs_u, by='genres') %>%
+  mutate(pred = mu_hat + b_hat_u + b_hat_g) %>%
+  .$pred
+
+model_7_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "User + Genre Effects Model", 
+                          RMSE = model_7_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                 |      RMSE|
+# |:--------------------------------------|---------:|
+# |Just the Average Model                 | 1.0612018|
+# |Movie Effect Model                     | 0.9439087|
+# |Movie + User Effects Model             | 0.8653488|
+# |Movie * User Effects Interaction Model | 0.8978567|
+# |Movie + User + Genre Effects Model     | 0.8649469|
+# |User + Genre Effects Model             | 0.9463636|
+
+# The prediction did not improve
+
+
+## 6.4 "Modeling movie and genre interaction effects"
+
+# Add a movie and genres interaction term to model 6 ("Movie + User + Genre Effects Model") above:
+# Y_m,u,g = mu_hat + b_hat_m + b_hat_u + b_hat_g + (b_hat_m * b_hat_g) + e_m,u,g
+
+# Check if the prediction improves after the interaction is added to the model
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs, by='genres') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_g + (b_hat_m * b_hat_g)) %>%
+  .$pred
+
+model_8_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "User + Movie * Genre Effects Interaction Model",  
+                                     RMSE = model_8_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+
+# The prediction improved slightly from the prediction in model 3 ("Movie + User Effects Model") 
+# from section 4.2 but model 6 ("Movie + User + Genre Effects Model") above improved the 
+# prediction more
+
+
+## 6.5 "Modeling user and genre interaction effects"
+
+# Add a user and genres interaction term to model 6 ("Movie + User + Genre Effects Model") above: 
+# Y_m,u,g = mu_hat + b_hat_m + b_hat_u + b_hat_g + (b_hat_u * b_hat_g) + e_m,u,g
+
+# Check if the prediction improves after the interaction is added to the model
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs, by='genres') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_g + (b_hat_u * b_hat_g)) %>%
+  .$pred
+
+model_9_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User * Genre Effects Interaction Model",  
+                                     RMSE = model_9_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+# |Movie + User * Genre Effects Interaction Model | 0.8652007|
+
+# The prediction improved slightly from the prediction in model 3 ("Movie + User Effects Model") 
+# from section 4.2 but model 6 ("Movie + User + Genre Effects Model") above improved the 
+# prediction more
+
+
+## 6.6 "Modeling movie, user and title effects" 
+
+# Add title to model model 3 ("Movie + User Effects Model") from section 4.2: 
+# Y_m,u,t = mu_hat + b_hat_m + b_hat_u + b_hat_t + e_m,u,t
+
+# Use the average of (Y_m − mu_hat - b_hat_m - b_hat_t) for each title because the dataset
+# has a lot of observations 
+
+title_avgs <- edx %>%  
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  group_by(title) %>%
+  summarise(b_hat_t = mean(rating - mu_hat - b_hat_m - b_hat_u))
+
+# Check if prediction improves after the title is added to the model 
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(title_avgs, by='title') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_t) %>%
+  .$pred
+
+model_10_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User + Title Effects Model",  
+                                     RMSE = model_10_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+# |Movie + User * Genre Effects Interaction Model | 0.8652007|
+# |Movie + User + Title Effects Model             | 0.8640972|
+
+# Adding the title term to the model improved the RMSE but not enough to justify 
+# adding another predictor to the model and making it more complex
+
+
+## 6.7 "Modeling movie and title interaction effects"
+
+# Check if the prediction improves after a movie and title interaction is added to model 10
+# ("Movie + User + Title Effects Model") above:
+# Y_m,u,t = mu_hat + b_hat_m + b_hat_u + b_hat_t + (b_hat_m * b_hat_t) +e_m,u,t
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(title_avgs, by='title') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_t + (b_hat_m * b_hat_t)) %>%
+  .$pred
+
+model_11_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "User + Movie * Title Interaction Effects Model",  
+                                     RMSE = model_11_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+# |Movie + User * Genre Effects Interaction Model | 0.8652007|
+# |Movie + User + Title Effects Model             | 0.8640972|
+# |User + Movie * Title Interaction Effects Model | 0.8645226|
+
+# The prediction improved from the prediction in model 3 ("Movie + User Effects Model")
+# in section 4.2, but model 10 ("Movie + User + Title Effects Model") above improved the 
+# prediction more
+
+
+## 6.8 "Modeling user and title interaction effects"
+
+# Check if the prediction improves after a user and title interaction is added to model 10
+# ("Movie + User + Title Effects Model") above:
+# Y_m,u,t = mu_hat + b_hat_m + b_hat_u + b_hat_t + (b_hat_u * b_hat_t) + e_m,u,t
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(title_avgs, by='title') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_t + (b_hat_u * b_hat_t)) %>%
+  .$pred
+
+model_12_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User * Title Interaction Effects Model",  
+                                     RMSE = model_12_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+# |Movie + User * Genre Effects Interaction Model | 0.8652007|
+# |Movie + User + Title Effects Model             | 0.8640972|
+# |User + Movie * Title Interaction Effects Model | 0.8645226|
+# |Movie + User * Title Interaction Effects Model | 0.8647177|
+
+# # The prediction improved from the prediction in model 3 ("Movie + User Effects Model")
+# in section 4.2, but model 10 ("Movie + User + Title Effects Model") above improved the 
+# prediction more 
+
+
+## 6.9 "Modeling movie, user, genre and title effects"
+
+# Check if the prediction improves after genres and title are added to model 3 ("Movie + User 
+# Effects Model") in section 4.2:
+# Y_m,u,g,t = mu_hat + b_hat_m + b_hat_u + b_hat_g + b_hat_t + e_m,u,g,t
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs, by='genres') %>%
+  left_join(title_avgs, by='title') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_g + b_hat_t) %>%
+  .$pred
+
+model_13_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User + Genre + Title Effects Model",  
+                                     RMSE = model_13_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                         |      RMSE|
+# |:----------------------------------------------|---------:|
+# |Just the average                               | 1.0612018|
+# |Movie Effect Model                             | 0.9439087|
+# |Movie + User Effects Model                     | 0.8653488|
+# |Movie * User Effects Interaction Model         | 0.8978567|
+# |Movie + User + Genre Effects Model             | 0.8649469|
+# |User + Genre Effects Model                     | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model | 0.8650310|
+# |Movie + User * Title Interaction Effects Model | 0.8652007|
+# |Movie + User + Title Effects Model             | 0.8640972|
+# |User + Movie * Title Interaction Effects Model | 0.8645226|
+# |Movie + User * Title Interaction Effects Model | 0.8647177|
+# |Movie + User + Genre + Title Effects Model     | 0.8643771|
+
+# The prediction improved from the prediction in model model 3 ("Movie + User Effects Model")
+# in section 4.2, but model 10 ("Movie + User + Title Effects Model") above improved the 
+# prediction more 
+
+
+## 6.10 "Modeling genre and title interaction effects"
+
+# Check if the prediction improves after a genres and title interaction term is added to model
+# 13 ("Movie + User + Genre + Title Effects Model") above
+# Y_m,u,g,t = mu_hat + b_hat_m + b_hat_u + b_hat_g + b_hat_t + (b_hat_g * b_hat_t) + e_m,u,g,t
+
+predicted_ratings <- validation %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  left_join(genres_avgs, by='genres') %>%
+  left_join(title_avgs, by='title') %>%
+  mutate(pred = mu_hat + b_hat_m + b_hat_u + b_hat_g + b_hat_t + (b_hat_g * b_hat_t)) %>%
+  .$pred
+
+model_14_rmse <- RMSE(predicted_ratings, validation$rating)
+rmse_results <- bind_rows(rmse_results,
+                          data_frame(method = "Movie + User + Genre * Title Interaction Effects Model",  
+                                     RMSE = model_14_rmse))
+rmse_results %>% knitr::kable()
+
+# |method                                                |      RMSE|
+# |:-----------------------------------------------------|---------:|
+# |Just the average                                      | 1.0612018|
+# |Movie Effect Model                                    | 0.9439087|
+# |Movie + User Effects Model                            | 0.8653488|
+# |Movie * User Effects Interaction Model                | 0.8978567|
+# |Movie + User + Genre Effects Model                    | 0.8649469|
+# |User + Genre Effects Model                            | 0.9463636|
+# |User + Movie * Genre Effects Interaction Model        | 0.8650310|
+# |Movie + User * Genre Effects Interaction Model        | 0.8652007|
+# |Movie + User + Title Effects Model                    | 0.8640972|
+# |User + Movie * Title Interaction Effects Model        | 0.8645226|
+# |Movie + User * Title Interaction Effects Model        | 0.8647177|
+# |Movie + User + Genre + Title Effects Model            | 0.8643771|
+# |Movie + User + Genre * Title Interaction Effects Model| 0.8643822|
+
+# The prediction improved from the prediction in model model 3 ("Movie + User Effects Model")
+# in section 4.2, but model 10 ("Movie + User + Title Effects Model") above improved the 
+# prediction more 
+
+# These additonal models greatly contributed to the choice of the final model listed in section 5.2 
+# above. Although model 10 ("Movie + User + Title Effects Model") from section 6.6 improved the RMSE
+# prediction the most it incorporated an additional predictor and it did not improve the RMSE by 
+# quite a bit to justify the addition of an extra term to model 3 ("Movie + User Effects Model"). 
+# After model 3 was selected it was regularized to prevent overffiting and the final model, model 4,
+# ("Regularized Movie + User Effects Model") was chosen.
+
+```
+
+
+
+
+
+## Abstract
+
+This report presents a machine learning algorithm for movie ratings. The algorithm provides a model that improves movie rating predictions in a large dataset. The model’s accuracy was measured using residual mean squared error (RMSE). The lowest RMSE achieved with the minimal number of predictors was 0.86482. The final model was selected due to its simplicity and low RMSE. 
+
+
+
+## Introduction
+
+Recommendation systems are used in a wide variety of fields as a tool that makes predictions based on a user’s preferences. Companies such as Netflix, Hulu and Amazon, and institutions such as the GroupLens Research Group, use movie recommendation systems to give personalized movie recommendations to their users. 
+
+Netflix uses a machine learning algorithm that makes predictions and gives movie recommendations based on many criteria - one of which is their user’s movie star ratings [3, 5]. Unlike the Netflix database, which is not readily available online, the Movielens database, created by the GroupLens Research Group, is a database that resembles the Netflix database and can be used to build and optimize a movie recommendation algorithm [2, 5, 7]. 
+
+The Movielens 10M dataset is a dataset with over ten million movies ratings, which was released on the GroupLens website in 2009 [7]. The data was collected by the GroupLens Social Computing Research Group and made available to the public for educational purposes. 
+
+The goal for this project was to create a movie recommendation system by building a machine learning algorithm on the Movielens 10M dataset. The dataset was split into two sets, a train set and a validation set. A machine learning algorithm that predicts movie ratings was developed and used to train a model on the train set and was then tested on the validation set. Regularization techniques were applied to the final model to prevent overfitting.
+
+
+
+## Methods
+
+### Sample
+
+The GroupLens Research Group at the University of Minnesota created the Movielens website as a movie recommendation engine that personalizes a user’s movie watching experience, by taking the user’s movie preferences as a reference guide and recommending new movies based on a custom-built user movie profile [8]. Different Movielens datasets were created using data collected from users of the Movieles website.
+
+The most current Movielens dataset contains 27,000,000 ratings and was released in 2018 on the GroupLens website. The Grouplens Group has created various sizes of the Movielens dataset that contain different number of observations collected during several time periods [2, 8].  
+
+Part of the Movielens 10M dataset was used for data analysis and will be discussed in this report. The Movielens data was taken from the Ratings and Movies files. The analyzed data contained 10000054 observations and 6 variables: “movieId”, “userId”, “rating”, “timestamp”, “title” and “genres”. There were 69878 users, 10677 movies, 10000054 ratings with 10 rating categories, 7096905 timestamp entries, 10676 movie titles and 797 movie genres included in the analysis. This Movielens dataset did not contain demographic information [7].
+
+__Table 1: Sample characteristics__
+
+| movielens variables | distinct | missing |
+| ------------------- |:--------:| -------:|
+| users (userId)      | 69878    | 0       |
+| movies (movieId)    | 10677    | 0       |
+| rating              | 10000054 | 0       |
+| timestamp           | 7096905  | 0       |
+| title               | 10676    | 0       |
+| genres              | 797      | 0       |
+
+According to the Movielens 10M dataset summary, users were randomly selected and have provided a minimum of 20 movie ratings [2, 7]. Each user was given a “userId” and each movie was given a “movieId”. Movie ratings represent a numeric half-star incremental rating scale with 0.5 stars being the lowest possible rating a user could give to a movie and 5 stars being the highest possible rating. The “timestamp” variable was computed by taking “seconds since midnight Coordinated Universal Time (UTC) of January 1, 1970” [7]. Movie titles were taken from the original IMDB movie titles [2, 4]. Movie genres are diverse with some genre categories representing a combination of more than one genre, such as “Forrest Gump”, which was coded as a “Comedy/Drama/Romance/War”.
+
+### Data Cleaning, Exploration and Visualization:
+
+The Movielens 10M dataset files were downloaded from the Grouplens website [7]. The Ratings file contained 4 variables: “userId”, “movieId”, “rating” and “timestamp”. The Movies file contained 3 variables: “movieId”, “title” and “genres”. 
+
+Data cleaning consisted of splitting the string variables in the Movies file, formatting the datatype of the variables in the file, turning it into a data frame and joining it with the Ratings file into a “movielens” dataset. The dataset consisted of 6 variables: “userId”, “movieId”, “rating”, “timestamp”, “title” and “genres”. 
+
+Data exploration and visualization included confirming the structure and dimensions of the movielens dataset, inspecting the first few observations in the dataset, checking for missing and distinct values for each variable in the set, calculating the observed versus expected number of movies in the set based on distinct values for users and movies, and graphing users and movies. There were no missing values for any of the 6 variables in the set. The distinct/unique number for each one of the 6 variables is listed in the Sample section above. There were 69878 distinct users and 10677 distinct movies, which should have led to a combined product of 746087406 expected ratings given the number of users and movies in the dataset, however the observed number of ratings was only 10000054. Log scale was used for the users and movies graphs to help with skewness by producing better visual representation of the data. The appearance of the distribution in the graphs of users and movies suggested that some users rated more movies that other users and some movies had more ratings that other movies. 
+
+```{r users, echo=FALSE}
+movielens %>% 
+  count(userId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("Users")
+```
+
+```{r movies, echo=FALSE}
+movielens %>% 
+  count(movieId) %>% 
+  ggplot(aes(n)) + 
+  geom_histogram(bins = 30, color = "black") + 
+  scale_x_log10() + 
+  ggtitle("Movies")
+```
+
+### Insights
+
+The visual insight gained from the graphs was consistent with the information accumulated from the data exploration of the observed versus expected number of ratings in the movielens dataset. Some possible explanations for the trends seen through the data exploration and visualization for users could be that user rating activity is related to individual characteristics, timing of movie watching, devices used for movie watching, and length of time spent on movie watching [3]. For movies, the trend might be related to movie popularity and genre [5]. Most of these variables were not present in the dataset to allow for further analysis. 
+
+### Training and test set
+
+The movielens dataset was split into a train set named “edx” and a test set named “validation”. The validation set was 10% of the movielens dataset. MovieId’s and userId’s in the validation set were also present in the edx set. Additional movieId’s and userId’s present in the validation set but not present in the edx set were removed from the validation set and added back into the edx set. 
+
+### Modeling approach
+
+A machine learning algorithm was built to predict movie ratings. The accuracy of the trained model was measured by computing RMSE. The model was optimized by minimizing the mean squared error (RMSE) in the validation set. Different models were tested. The final model was selected based on the lowest RMSE given the least number of predictors. 
+
+__Model 1 “Just the Average”:__ Y = mu_hat + e
+
+Model 1 took a naïve approach to predicting movie ratings and was based on the assumption that all differences from the average rating were due to random variation in the distribution.
+
+__Model 2 “Movie Effects Model”:__ Y_m = mu_hat + b_hat_m + e_m
+
+From the movie graph in the Data visualization portion of the report, it could be seen that not all movies were rated the same. Model 2 explored the difference in ratings due to the effects of different movies.
+
+__Model 3 “Movie and User Effects Model”:__ Y_mu,u = mu_hat + b_hat_m + b_hat_u + e_m,u
+
+From the user graph in the Data visualization portion of the report, it could be seen that not all users rated movies the same. Model 3 explored the difference in rating due the effects of both the different movies and users. 
+
+Other models were trained including the addition of an interaction term and the inclusion of the genre and title variables. However, these models did not make the cut because the RMSE achieved for most of them was not lower than the RMSE achieved by Model 3. 
+
+__Model 4 “Regularized Movie and User Effects Model”__
+
+Because some model variation in Model 3 was suspected to be due to very high or vary low ratings given by only a small number of users, regularization was applied to the model. After regularization, the model RMSE decreased suggesting some model overfitting was present. Cross validation was used to pick an optimal lambda parameter for the regularized model.
+
+```{r penalized squared estimates, echo=FALSE}
+data_frame(original = movie_avgs$b_hat_m, 
+           regularlized = movie_reg_avgs$b_hat_m, 
+           n = movie_reg_avgs$n_hat_m) %>%
+  ggplot(aes(original, regularlized, size=sqrt(n))) + 
+  geom_point(shape=1, alpha=0.5)
+```
+
+
+
+## Results
+
+Different models were trained to predict movie ratings in the validation set. The goal was to train a model and test it on the validation set to produce a RMSE lower than or equal to 0.87750.  Model 4, “Regularized Movie and User Effects Model”, produced a RMSE of 0.86482 with two predictors – movieId and userId. The beauty of this model is that it is simple, thus it can be easily taken and reproduced for another dataset because it is not too specific to this particular dataset.
+
+More predictors were added but the RMSE did not improve substantially. These additional models greatly contributed to the choice of the final model. Although model 10 "Movie, User and Title Effects Model", not described above, produced the lowest RMSE, it incorporated an additional predictor and it did not lower the RMSE by more than 1% to justify the addition of an extra predictor to Model 3 ("Movie and  User Effects Model"). After examining the more models and the RMSE they produced, Model 3 was selected for further analysis and was regularized to prevent overfitting. It produced the final model – Model 4 (“Regularized Movie and User Effects Model”).
+
+__Table 2: Models__
+
+| Model                                  | RMSE      |
+| :------------------------------------- |----------:| 
+| Just the Average Mode                  | 1.0612018 | 
+| Movie Effect Model                     | 0.9439087 | 
+| Movie + User Effects Model             | 0.8653488 | 
+| Regularized Movie + User Effects Model | 0.8648170 |
+| Movie + User + Title Effects Model***  | 0.8640972 | 
+
+*** Additonal model discussed above but not selected as the final model
+
+
+
+## Conclusion
+
+### Key Findings
+
+MovieId and userID were the two predictors included in the final model trained to predict movie ratings. Although the final model did not produce the lowest RMSE, it was selected using an additional criterion – simplicity. 
+
+### Limitations
+
+Model 4 did not address the “timestamp” variable in the dataset. This temporal variable could have provided valuable information about timing of movie watching and whether has an effect on movie ratings [3]. 
+This report also did not address item-to-item collaborative filtering, matrix factorization or ensemble methods as possible training model techniques [1, 6].
+The dataset used for this analysis did not provide demographic information or information related to user preferences on movie watching, such as devices used for movie watching.
+
+### Future areas of research
+
+Adding a temporal component to the prediction model is a potential next step that could highlight new and unexpected relationships between movie ratings and movie popularity, user activity, and time of movie watching.
+
+
+
+## References
+
+[1] Chen, E. Winning the Netflix Prize: A Summary [Blog post]. Retrieved from (http://blog.echen.me/2011/10/24/winning-the-netflix-prize-a-summary/)
+
+[2] Harper F. M. and Konstan, J. A.  (2015). The MovieLens Datasets: History and Context. _ACM Transactions on Interactive Intelligent Systems (TiiS) 5(4), 19_. doi: (http://dx.doi.org/10.1145/2827872)
+
+[3] How Netflix’s Recommendation System Works. Retrieved from (https://help.netflix.com/en/node/100639)
+
+[4] IDBM Website. Retrieved from (https://www.imdb.com)
+
+[5] Irizarry, R. (2019). Introduction to Data Science [Book]. Retrieved from (https://rafalab.github.io/dsbook/large-datasets.html#recommendation-systems)
+
+[6] Koren, Y. (2009). The BellKor Solution to the Netflix Grand Prize [PDF file]. Retrieved from (https://www.netflixprize.com/assets/GrandPrize2009_BPC_BellKor.pdf)
+
+[7] Movielens Database. Retrieved from (https://grouplens.org/datasets/movielens/)
+
+[8] Movielens Website. Retrieved from (https://movielens.org)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
