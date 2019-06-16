@@ -909,6 +909,8 @@ This report presents a machine learning algorithm for movie ratings. The algorit
 
 
 
+
+
 ## Introduction
 
 Recommendation systems are used in a wide variety of fields as a tool that makes predictions based on a user’s preferences. Companies such as Netflix, Hulu and Amazon, and institutions such as the GroupLens Research Group, use movie recommendation systems to give personalized movie recommendations to their users. 
@@ -918,6 +920,8 @@ Netflix uses a machine learning algorithm that makes predictions and gives movie
 The Movielens 10M dataset is a dataset with over ten million movies ratings, which was released on the GroupLens website in 2009 [7]. The data was collected by the GroupLens Social Computing Research Group and made available to the public for educational purposes. 
 
 The goal for this project was to create a movie recommendation system by building a machine learning algorithm on the Movielens 10M dataset. The dataset was split into two sets, a train set and a validation set. A machine learning algorithm that predicts movie ratings was developed and used to train a model on the train set and was then tested on the validation set. Regularization techniques were applied to the final model to prevent overfitting.
+
+
 
 
 
@@ -1010,6 +1014,8 @@ data_frame(original = movie_avgs$b_hat_m,
 
 
 
+
+
 ## Results
 
 Different models were trained to predict movie ratings in the validation set. The goal was to train a model and test it on the validation set to produce a RMSE lower than or equal to 0.87750.  Model 4, “Regularized Movie and User Effects Model”, produced a RMSE of 0.86482 with two predictors – movieId and userId. The beauty of this model is that it is simple, thus it can be easily taken and reproduced for another dataset because it is not too specific to this particular dataset.
@@ -1030,6 +1036,8 @@ __Table 2: Models__
 
 
 
+
+
 ## Conclusion
 
 ### Key Findings
@@ -1045,6 +1053,8 @@ The dataset used for this analysis did not provide demographic information or in
 ### Future areas of research
 
 Adding a temporal component to the prediction model is a potential next step that could highlight new and unexpected relationships between movie ratings and movie popularity, user activity, and time of movie watching.
+
+
 
 
 

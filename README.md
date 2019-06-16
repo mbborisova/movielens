@@ -10,5 +10,5 @@ R script
 - contains project code 
 
 Report:
-- contains project report
-- contains project code 
+- contains project report (RMD format and PDF format)
+- contains project code (in RMD format)
